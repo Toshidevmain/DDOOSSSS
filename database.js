@@ -16,9 +16,7 @@ const userSchema = new mongoose.Schema({
 const User = mongoose.model("User", userSchema);
 
 async function connectDB() {
-    const uri = process.env.MONGODB_URI;
-    if (!uri) throw new Error("MONGODB_URI not set");
-    await mongoose.connect(uri);
+    await mongoose.connect("mongodb+srv://toshidev0:zcode22107@dbtxt.3dxoaud.mongodb.net/DILDOSBOT");
     console.log("MongoDB connected");
 }
 

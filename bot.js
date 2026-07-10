@@ -1,23 +1,9 @@
-const fs = require("fs");
 const { Telegraf } = require("telegraf");
 const { startAttack, stopAttack, stopAll, getStatus } = require("./cf");
 const db = require("./database");
 
-if (fs.existsSync(".env")) {
-    const env = fs.readFileSync(".env", "utf8");
-    env.split("\n").forEach(line => {
-        const [key, ...rest] = line.split("=");
-        if (key && rest.length) process.env[key.trim()] = rest.join("=").trim();
-    });
-}
-
-const BOT_TOKEN = process.env.BOT_TOKEN;
-const OWNER_ID = Number(process.env.OWNER_ID) || 0;
-
-if (!BOT_TOKEN) {
-    console.error("BOT_TOKEN environment variable is required");
-    process.exit(1);
-}
+const BOT_TOKEN = "8823763326:AAFdYsnPI4GVckfdWgxGE8Pr5bvdy1OBUsg";
+const OWNER_ID = 8610829185;
 
 const bot = new Telegraf(BOT_TOKEN);
 
