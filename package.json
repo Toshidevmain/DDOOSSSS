@@ -1,0 +1,12 @@
+{
+  "name": "ddos-telegram-bot",
+  "version": "1.0.0",
+  "main": "bot.js",
+  "scripts": {
+    "start": "node bot.js"
+  },
+  "dependencies": {
+    "mongoose": "^9.7.4",
+    "telegraf": "^4.16.3"
+  }
+}

